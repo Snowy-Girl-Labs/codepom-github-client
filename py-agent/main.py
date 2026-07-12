@@ -156,7 +156,7 @@ def call_llm_for_fix(file_path: str, line_number: int, message: str, rule_key: s
         
     return f"// Fallback fix for {rule_key}"
 
-def apply_fix_and_create_pr(file_path: str, line_number: int, fix_code: str, issue_key: str, message: str, end_line: Optional[int] = None):
+def apply_fix_and_create_pr(file_path: str, line_number: int, fix_code: str, issue_key: str, message: str, end_line: Optional[int] = None) -> bool:
     if end_line is None:
         end_line = line_number
         
@@ -173,14 +173,21 @@ def apply_fix_and_create_pr(file_path: str, line_number: int, fix_code: str, iss
         if "\n" not in clean_fix:
             clean_fix = " " * indent + clean_fix.lstrip()
             
-        lines[line_number - 1:end_line] = [clean_fix]
-        new_content = "\n".join(lines) + "\n"
+        # Preview the change
+        preview_lines = list(lines)
+        preview_lines[line_number - 1:end_line] = [clean_fix]
+        new_content = "\n".join(preview_lines) + "\n"
+        
+        if new_content == content:
+            print(f"🐾 Guard: Code at {file_path}:{line_number} is already fixed / matches suggestion. Skipping PR creation.")
+            return False
+
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(new_content)
         print(f"🐾 Applied code fix to lines {line_number}-{end_line} of {file_path}")
     else:
         print(f"⚠️ Invalid line number {line_number} for file {file_path}, skipping filesystem write")
-        return
+        return False
 
     try:
         branch_name = f"codepom/fix-{issue_key}"
@@ -209,6 +216,8 @@ def apply_fix_and_create_pr(file_path: str, line_number: int, fix_code: str, iss
     except Exception as e:
         print(f"⚠️ Git/GitHub operation failed: {e}", file=sys.stderr)
         subprocess.run(["git", "checkout", "main"], cwd=base_dir)
+        
+    return True
 
 def execute_job(job: Job) -> dict:
     """Executes the specific LLM consensus or triage job."""
@@ -266,7 +275,9 @@ def execute_job(job: Job) -> dict:
     if job.job_type == "sonarqube_triage" and is_real_github_environment():
         print(f"🐾 Real GitHub environment detected. Generating autofix for {issue_key}...")
         fix_code = call_llm_for_fix(file_path, line_number, message, rule_key, file_content)
-        apply_fix_and_create_pr(file_path, line_number, fix_code, issue_key, message, end_line)
+        applied = apply_fix_and_create_pr(file_path, line_number, fix_code, issue_key, message, end_line)
+        if not applied:
+            print(f"🐾 Skip E2E PR flow: {issue_key} is already resolved.")
 
     return {
         "status": "completed",
