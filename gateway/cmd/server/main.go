@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -25,8 +24,8 @@ func main() {
 		port = "8000"
 	}
 
-	// Initialize the memory queue provider
-	qProvider := queue.NewMemoryProvider()
+	// Initialize the Core queue provider
+	qProvider := queue.NewCoreProvider()
 	srv := &Server{q: qProvider}
 
 	mux := http.NewServeMux()
@@ -38,11 +37,6 @@ func main() {
 		Addr:    ":" + port,
 		Handler: mux,
 	}
-
-	// Start queue worker daemon
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go srv.workerLoop(ctx)
 
 	// Graceful shutdown listener
 	stop := make(chan os.Signal, 1)
@@ -122,48 +116,4 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]string{"jobId": jobID, "status": "queued"})
-}
-
-// workerLoop polls the queue sequentially and runs worker tasks
-func (s *Server) workerLoop(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	log.Println("🐾 Background Queue Worker started.")
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("Queue Worker stopping...")
-			return
-		case <-ticker.C:
-			job, err := s.q.Dequeue(ctx)
-			if err != nil {
-				log.Printf("Worker error dequeuing job: %v", err)
-				continue
-			}
-			if job == nil {
-				continue
-			}
-
-			log.Printf("🐾 Processing job %s [Type: %s, Attempt: %d]...", job.ID, job.Type, job.Attempts)
-
-			// Execute the worker payload processing
-			err = s.processJob(ctx, job)
-			if err != nil {
-				log.Printf("❌ Job %s failed: %v", job.ID, err)
-				_ = s.q.Nack(ctx, job.ID, err)
-			} else {
-				log.Printf("✅ Job %s completed successfully", job.ID)
-				_ = s.q.Ack(ctx, job.ID)
-			}
-		}
-	}
-}
-
-func (s *Server) processJob(ctx context.Context, job *queue.Job) error {
-	// Emulate executing the Python triage/fixing worker
-	time.Sleep(2 * time.Second)
-	log.Printf("🤖 Worker: Spawning Python script to process payload of size %d bytes...", len(job.Payload))
-	return nil
 }
