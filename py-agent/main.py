@@ -156,7 +156,7 @@ def call_llm_for_fix(file_path: str, line_number: int, message: str, rule_key: s
         
     return f"// Fallback fix for {rule_key}"
 
-def apply_fix_and_create_pr(file_path: str, line_number: int, fix_code: str, issue_key: str, message: str, end_line: Optional[int] = None) -> bool:
+def apply_fix_and_create_pr(file_path: str, line_number: int, fix_code: str, issue_key: str, message: str, report: str, rule_key: str, end_line: Optional[int] = None) -> bool:
     if end_line is None:
         end_line = line_number
         
@@ -189,6 +189,52 @@ def apply_fix_and_create_pr(file_path: str, line_number: int, fix_code: str, iss
         print(f"⚠️ Invalid line number {line_number} for file {file_path}, skipping filesystem write")
         return False
 
+    # Create a GitHub Issue with the analysis/description first
+    github_issue_number = None
+    issue_title = f"[SonarQube] Resolve {rule_key} at {file_path}:{line_number}"
+    sonarqube_url = f"https://sonarqube.snowygirl.com/project/issues?id=dangeReis_codepom&issues={issue_key}"
+    issue_body = (
+        f"### SonarQube Issue Details\n"
+        f"- **Key:** `{issue_key}`\n"
+        f"- **Rule:** `{rule_key}`\n"
+        f"- **Location:** `{file_path}:{line_number}`\n"
+        f"- **SonarQube URL:** [View on SonarQube]({sonarqube_url})\n\n"
+        f"### Message\n"
+        f"> {message}\n\n"
+        f"### Model Council Consensus Report\n"
+        f"{report}\n"
+    )
+
+    try:
+        import json
+        # Search if an issue was already created for this SonarQube key
+        issue_check = subprocess.run([
+            "gh", "issue", "list",
+            "--search", f"\"{issue_key}\" in:body",
+            "--json", "number",
+            "--limit", "1"
+        ], cwd=base_dir, capture_output=True, text=True)
+        
+        if issue_check.returncode == 0 and issue_check.stdout.strip() and issue_check.stdout.strip() != "[]":
+            existing = json.loads(issue_check.stdout)
+            if existing:
+                github_issue_number = existing[0]["number"]
+                print(f"🐾 Found existing GitHub Issue #{github_issue_number} for this SonarQube issue")
+                
+        if not github_issue_number:
+            issue_create = subprocess.run([
+                "gh", "issue", "create",
+                "--title", issue_title,
+                "--body", issue_body
+            ], cwd=base_dir, capture_output=True, text=True, check=True)
+            stdout_str = issue_create.stdout.strip()
+            # gh issue create prints the URL of the created issue, e.g. .../issues/680
+            github_issue_number = stdout_str.split("/")[-1]
+            print(f"🐾 Created GitHub Issue #{github_issue_number}")
+    except Exception as e:
+        print(f"⚠️ Failed to manage GitHub Issue: {e}", file=sys.stderr)
+        github_issue_number = "1"
+
     try:
         branch_name = f"codepom/fix-{issue_key}"
         subprocess.run(["git", "checkout", "main"], cwd=base_dir, check=True)
@@ -206,7 +252,7 @@ def apply_fix_and_create_pr(file_path: str, line_number: int, fix_code: str, iss
             subprocess.run([
                 "gh", "pr", "create",
                 "--title", f"fix: resolve SonarQube issue {issue_key}",
-                "--body", f"This automated PR resolves SonarQube issue **{issue_key}**:\n> {message}\n\nAttributed to SCM author.",
+                "--body", f"Closes #{github_issue_number}\n\nThis PR resolves the SonarQube issue **{issue_key}** by applying the automated fix described in #{github_issue_number}.",
                 "--base", "main",
                 "--head", branch_name
             ], cwd=base_dir, check=True)
@@ -275,7 +321,7 @@ def execute_job(job: Job) -> dict:
     if job.job_type == "sonarqube_triage" and is_real_github_environment():
         print(f"🐾 Real GitHub environment detected. Generating autofix for {issue_key}...")
         fix_code = call_llm_for_fix(file_path, line_number, message, rule_key, file_content)
-        applied = apply_fix_and_create_pr(file_path, line_number, fix_code, issue_key, message, end_line)
+        applied = apply_fix_and_create_pr(file_path, line_number, fix_code, issue_key, message, report, rule_key, end_line)
         if not applied:
             print(f"🐾 Skip E2E PR flow: {issue_key} is already resolved.")
 
