@@ -246,6 +246,21 @@ def apply_fix_and_create_pr(file_path: str, line_number: int, fix_code: str, iss
         subprocess.run(["git", "commit", "-m", f"fix: resolve SonarQube issue {issue_key}\n\n{message}"], cwd=base_dir, check=True)
         subprocess.run(["git", "push", "origin", branch_name, "--force"], cwd=base_dir, check=True)
         print(f"🐾 Pushed branch {branch_name} to GitHub")
+
+        sonar_host = os.getenv("SONARQUBE_HOST") or os.getenv("SONAR_HOST_URL")
+        sonar_token = os.getenv("SONARQUBE_TOKEN") or os.getenv("SONAR_TOKEN")
+        project_key = os.getenv("SONARQUBE_PROJECT") or "dangeReis_codepom"
+        if sonar_host and sonar_token:
+            print("🐾 Triggering local SonarQube scan to reanalyze fix branch...")
+            subprocess.run([
+                "npx", "sonarqube-scanner",
+                f"-Dsonar.host.url={sonar_host}",
+                f"-Dsonar.token={sonar_token}",
+                f"-Dsonar.projectKey={project_key}",
+                f"-Dsonar.projectName=codepom",
+                f"-Dsonar.sources=.",
+                f"-Dsonar.exclusions=**/node_modules/**,**/__pycache__/**,**/.venv/**"
+            ], cwd=base_dir)
         
         pr_check = subprocess.run(["gh", "pr", "list", "--head", branch_name, "--state", "open", "--json", "number"], cwd=base_dir, capture_output=True, text=True)
         if pr_check.returncode == 0 and "number" in pr_check.stdout and len(pr_check.stdout.strip()) > 5:
